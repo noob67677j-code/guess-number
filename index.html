@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Угадай число</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+            text-align: center;
+            padding: 20px;
+            margin: 0;
+        }
+        button {
+            background-color: var(--tg-theme-button-color, #3390ec);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+        }
+        input {
+            padding: 10px;
+            font-size: 16px;
+            width: 80%;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            text-align: center;
+        }
+        #game-area, #thinker-area, #guesser-area { display: none; }
+        .log { margin-top: 15px; font-size: 14px; color: #888; }
+    </style>
+</head>
+<body>
+
+    <h2 id="status">Нажми кнопку, чтобы найти игру</h2>
+    <button id="search-btn">Искать соперника</button>
+
+    <div id="thinker-area">
+        <p>Загадай число от 1 до 100:</p>
+        <input type="number" id="secret-number" min="1" max="100">
+        <button id="set-number-btn">Загадать</button>
+    </div>
+
+    <div id="guesser-area">
+        <p>Соперник загадал число! Твой вариант:</p>
+        <input type="number" id="guess-number">
+        <button id="guess-btn">Проверить</button>
+        <div id="logs" class="log"></div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Расширяем на весь экран
+
+        // ВАЖНО: Замени этот URL на адрес твоего запущенного сервера (например, на Render)
+        // Для локальных тестов можно использовать ngrok: wss://твой-адрес-ngrok/ws
+        const wsUrl = "wss://ТВОЙ-СЕРВЕР.com/ws"; 
+        
+        let ws;
+        const userId = tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 10000);
+
+        document.getElementById('search-btn').addEventListener('click', () => {
+            document.getElementById('status').innerText = "Поиск соперника...";
+            document.getElementById('search-btn').style.display = 'none';
+
+            ws = new WebSocket(`${wsUrl}/${userId}`);
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.action === "game_found") {
+                    document.getElementById('status').innerText = "Игра найдена!";
+                    if (data.role === "thinker") {
+                        document.getElementById('thinker-area').style.display = 'block';
+                        document.getElementById('status').innerText = "Ты загадываешь число!";
+                    } else {
+                        document.getElementById('status').innerText = "Ожидай... Соперник загадывает число.";
+                    }
+                }
+
+                if (data.action === "start_guessing") {
+                    document.getElementById('status').innerText = "Твой ход!";
+                    document.getElementById('guesser-area').style.display = 'block';
+                }
+
+                if (data.action === "guess_result") {
+                    if (data.result === "win") {
+                        document.getElementById('status').innerText = "🎉 Игра окончена! Число угадано: " + data.number;
+                        document.getElementById('guesser-area').style.display = 'none';
+                        document.getElementById('thinker-area').style.display = 'none';
+                    } else {
+                        const logs = document.getElementById('logs');
+                        logs.innerHTML += `<br>Число ${data.number} — ${data.result}`;
+                    }
+                }
+            };
+        });
+
+        // Отправка загаданного числа
+        document.getElementById('set-number-btn').addEventListener('click', () => {
+            const num = document.getElementById('secret-number').value;
+            if (num) {
+                ws.send(JSON.stringify({ action: "set_number", number: parseInt(num) }));
+                document.getElementById('thinker-area').style.display = 'none';
+                document.getElementById('status').innerText = "Соперник пытается угадать...";
+            }
+        });
+
+        // Отправка попытки угадать
+        document.getElementById('guess-btn').addEventListener('click', () => {
+            const num = document.getElementById('guess-number').value;
+            if (num) {
+                ws.send(JSON.stringify({ action: "guess", number: parseInt(num) }));
+            }
+        });
+    </script>
+</body>
+</html>
