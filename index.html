@@ -3,124 +3,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Угадай число</title>
+    <title>Игра через Google Таблицы</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body {
-            font-family: sans-serif;
-            background-color: var(--tg-theme-bg-color, #ffffff);
-            color: var(--tg-theme-text-color, #000000);
-            text-align: center;
-            padding: 20px;
-            margin: 0;
-        }
-        button {
-            background-color: var(--tg-theme-button-color, #3390ec);
-            color: var(--tg-theme-button-text-color, #ffffff);
-            border: none;
-            padding: 12px 20px;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-            width: 100%;
-            margin-top: 10px;
-        }
-        input {
-            padding: 10px;
-            font-size: 16px;
-            width: 80%;
-            margin: 10px 0;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            text-align: center;
-        }
-        #game-area, #thinker-area, #guesser-area { display: none; }
-        .log { margin-top: 15px; font-size: 14px; color: #888; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #fafafa; }
+        button { background: #3390ec; color: #fff; border: none; padding: 12px; border-radius: 8px; width: 100%; margin-top: 10px; font-size: 16px; }
+        input { padding: 10px; width: 80%; margin: 10px 0; border: 1px solid #ccc; border-radius: 8px; text-align: center; }
+        .screen { display: none; }
+        .active { display: block; }
     </style>
 </head>
 <body>
 
-    <h2 id="status">Нажми кнопку, чтобы найти игру</h2>
-    <button id="search-btn">Искать соперника</button>
-
-    <div id="thinker-area">
-        <p>Загадай число от 1 до 100:</p>
-        <input type="number" id="secret-number" min="1" max="100">
-        <button id="set-number-btn">Загадать</button>
+    <h2 id="status">Поиск соперника через Google Таблицы</h2>
+    
+    <div id="screen-start" class="screen active">
+        <button id="search-btn">Начать поиск</button>
     </div>
 
-    <div id="guesser-area">
-        <p>Соперник загадал число! Твой вариант:</p>
+    <div id="screen-wait" class="screen">
+        <p id="wait-text">Ожидаем игроков...</p>
+    </div>
+
+    <div id="screen-thinker" class="screen">
+        <p>Загадай число (1-100):</p>
+        <input type="number" id="secret-number">
+        <button id="set-btn">Загадать число</button>
+    </div>
+
+    <div id="screen-guesser" class="screen">
+        <p>Твой ход! Угадай число соперника:</p>
         <input type="number" id="guess-number">
         <button id="guess-btn">Проверить</button>
-        <div id="logs" class="log"></div>
+        <p id="hint-text" style="color: red; font-weight: bold;"></p>
     </div>
 
     <script>
+        // ВСТАВЬ СЮДА СВОЮ ССЫЛКУ ИЗ GOOGLE APPS SCRIPT
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzBKasN-W_r4-Sy-htflxuloaGybOrk3gG7WLoAdoilFQGOs8XauEmopbtJD1gefRw3/exec"; 
+
         const tg = window.Telegram.WebApp;
-        tg.expand(); // Расширяем на весь экран
-
-        // ВАЖНО: Замени этот URL на адрес твоего запущенного сервера (например, на Render)
-        // Для локальных тестов можно использовать ngrok: wss://твой-адрес-ngrok/ws
-        const wsUrl = "wss://ТВОЙ-СЕРВЕР.com/ws"; 
+        const myId = tg.initDataUnsafe?.user?.id || "user_" + Math.floor(Math.random() * 10000);
         
-        let ws;
-        const userId = tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 10000);
+        let roomId = "";
+        let myRole = "";
+        let loopInterval = null;
 
-        document.getElementById('search-btn').addEventListener('click', () => {
-            document.getElementById('status').innerText = "Поиск соперника...";
-            document.getElementById('search-btn').style.display = 'none';
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
 
-            ws = new WebSocket(`${wsUrl}/${userId}`);
+        async function sendRequest(data) {
+            const response = await fetch(SCRIPT_URL, {
+                method: "POST",
+                body: JSON.stringify(data)
+            });
+            return await response.json();
+        }
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-
-                if (data.action === "game_found") {
-                    document.getElementById('status').innerText = "Игра найдена!";
-                    if (data.role === "thinker") {
-                        document.getElementById('thinker-area').style.display = 'block';
-                        document.getElementById('status').innerText = "Ты загадываешь число!";
-                    } else {
-                        document.getElementById('status').innerText = "Ожидай... Соперник загадывает число.";
+        document.getElementById('search-btn').addEventListener('click', async () => {
+            showScreen('screen-wait');
+            document.getElementById('status').innerText = "В очереди...";
+            
+            let res = await sendRequest({ action: "search", userId: myId });
+            
+            if (res.status === "found") {
+                roomId = res.roomId;
+                myRole = res.role;
+                startGame();
+            } else {
+                // Если мы первые в очереди, начинаем "пинговать" таблицу каждые 3 секунды в ожидании второго игрока
+                loopInterval = setInterval(async () => {
+                    let check = await sendRequest({ action: "check_queue", userId: myId });
+                    if (check.status === "found") {
+                        clearInterval(loopInterval);
+                        roomId = check.roomId;
+                        myRole = check.role;
+                        startGame();
                     }
-                }
-
-                if (data.action === "start_guessing") {
-                    document.getElementById('status').innerText = "Твой ход!";
-                    document.getElementById('guesser-area').style.display = 'block';
-                }
-
-                if (data.action === "guess_result") {
-                    if (data.result === "win") {
-                        document.getElementById('status').innerText = "🎉 Игра окончена! Число угадано: " + data.number;
-                        document.getElementById('guesser-area').style.display = 'none';
-                        document.getElementById('thinker-area').style.display = 'none';
-                    } else {
-                        const logs = document.getElementById('logs');
-                        logs.innerHTML += `<br>Число ${data.number} — ${data.result}`;
-                    }
-                }
-            };
-        });
-
-        // Отправка загаданного числа
-        document.getElementById('set-number-btn').addEventListener('click', () => {
-            const num = document.getElementById('secret-number').value;
-            if (num) {
-                ws.send(JSON.stringify({ action: "set_number", number: parseInt(num) }));
-                document.getElementById('thinker-area').style.display = 'none';
-                document.getElementById('status').innerText = "Соперник пытается угадать...";
+                }, 3000);
             }
         });
 
-        // Отправка попытки угадать
-        document.getElementById('guess-btn').addEventListener('click', () => {
-            const num = document.getElementById('guess-number').value;
+        function startGame() {
+            document.getElementById('status').innerText = "Игра началась!";
+            if (myRole === "thinker") {
+                showScreen('screen-thinker');
+            } else {
+                document.getElementById('wait-text').innerText = "Соперник придумывает число...";
+                showScreen('screen-wait');
+                startGameStateLoop(); // Угадывающий ждет, пока появится число
+            }
+        }
+
+        document.getElementById('set-btn').addEventListener('click', async () => {
+            let num = document.getElementById('secret-number').value;
             if (num) {
-                ws.send(JSON.stringify({ action: "guess", number: parseInt(num) }));
+                await sendRequest({ action: "set_number", roomId: roomId, number: parseInt(num) });
+                document.getElementById('wait-text').innerText = "Соперник пытается угадать...";
+                showScreen('screen-wait');
+                startGameStateLoop(); // Загадывающий начинает следить за догадками соперника
             }
         });
+
+        document.getElementById('guess-btn').addEventListener('click', async () => {
+            let num = document.getElementById('guess-number').value;
+            if (num) {
+                let res = await sendRequest({ action: "guess", roomId: roomId, number: parseInt(num) });
+                if (res.result === "win") {
+                    document.getElementById('status').innerText = "🎉 Ты победил!";
+                    showScreen('screen-start');
+                } else {
+                    document.getElementById('hint-text').innerText = "Подсказка: " + res.result;
+                }
+            }
+        });
+
+        // Каждые 3 секунды проверяем состояние игры в таблице
+        function startGameStateLoop() {
+            loopInterval = setInterval(async () => {
+                let state = await sendRequest({ action: "game_state", roomId: roomId });
+                
+                if (myRole === "guesser" && state.secret !== "") {
+                    clearInterval(loopInterval);
+                    showScreen('screen-guesser'); // Если число появилось, включаем экран ввода
+                }
+                
+                if (state.result === "win") {
+                    clearInterval(loopInterval);
+                    document.getElementById('status').innerText = myRole === "thinker" ? "😢 Тебя обыграли!" : "🎉 Победа!";
+                    showScreen('screen-start');
+                } else if (myRole === "thinker" && state.lastGuess !== "") {
+                    document.getElementById('wait-text').innerText = `Соперник ввел ${state.lastGuess}. Результат: ${state.result}`;
+                }
+            }, 3000);
+        }
     </script>
 </body>
 </html>
